@@ -1,0 +1,19 @@
+[gd_scene load_steps=5 format=3 uid="uid://d3vnunn7wbk14"]
+
+[ext_resource type="Script" path="res://main_node.cs" id="1_g1bbj"]
+[ext_resource type="Script" path="res://Player/CharacterBody2D.cs" id="1_p304h"]
+[ext_resource type="Script" path="res://Player/DrawPlayerNode.cs" id="2_n25t1"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_p3smo"]
+
+[node name="2DNodeScene" type="Node2D"]
+script = ExtResource("1_g1bbj")
+
+[node name="CharacterBody2D" type="CharacterBody2D" parent="."]
+script = ExtResource("1_p304h")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="CharacterBody2D"]
+shape = SubResource("CircleShape2D_p3smo")
+
+[node name="Node2D" type="Node2D" parent="CharacterBody2D"]
+script = ExtResource("2_n25t1")
