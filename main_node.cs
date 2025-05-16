@@ -1,259 +1,553 @@
-﻿using Godot;
+using Godot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
 #region Agent Data Class
 /// <summary>
-/// Represents a single agent with needs and behaviors.
+/// Represents a single agent with needs, behaviors, and personality traits.
 /// </summary>
 public class Agent
 {
-    public Vector2 Position { get; set; }
-    public Vector2 Velocity { get; set; }
-    public Color Color { get; set; }
+	public Vector2 Position { get; set; }
+	public Vector2 Velocity { get; set; }
+	public Color Color { get; set; }
+	public float Energy { get; set; } = 100f;
+	public float Health { get; set; } = 100f;
+	public float Hunger { get; set; }
+	public float Horniness { get; set; }
+	public float Age { get; set; } = 0f;
+	public bool IsDead { get;  set; } = false;
+	public float ReproductionCooldown { get; set; } = 0f;
 
-    public float Energy { get; set; } = 100f;
-    public float Health { get; set; } = 100f;
-    public float Hunger { get; set; } = 0f;
-    public float Horniness { get; set; } = 0f;
-    public float Age { get; set; } = 0f;
+	// Personality traits (0-1 scale)
+	public float HungerResistance { get;  set; } // How well they resist hunger
+	public float LibidoStrength { get;  set; }   // How strong their sex drive is
+	public float EnergyEfficiency { get;  set; } // How efficiently they use energy
+	public float Longevity { get;  set; }        // How long they can live
 
-    public bool IsHungry => Hunger >= 70f;
-    public bool IsHorny => Horniness >= 70f;
-    public bool IsTired => Energy <= 30f;
+	// Need thresholds - different for each agent based on personality
+	public float HungerThreshold;
+	public float HorninessThreshold;
+	public float TirednessThreshold;
 
-    public Agent(Vector2 position, Vector2 velocity, Color color)
-    {
-        Position = position;
-        Velocity = velocity;
-        Color = color;
-    }
+	// Hunger/horniness increase rates
+	public float HungerRate;
+	public float HorninessRate;
+	public float EnergyDrainRate;
 
-    public void UpdateNeeds(float dt)
-    {
-        Hunger += 10f * dt;
-        Horniness += 5f * dt;
-        Energy -= 8f * dt;
-        Age += dt;
+	// Maximum age based on longevity
+	public float MaxAge;
 
-        Hunger = MathF.Min(Hunger, 100f);
-        Horniness = MathF.Min(Horniness, 100f);
-        Energy = MathF.Max(Energy, 0f);
-    }
+	// Base movement speed
+	public float BaseSpeed;
 
-    public void DecideBehavior()
-    {
-        if (IsHungry)
-            Color = new Color(1f, 1f, 0f); // Yellow
-        else if (IsTired)
-            Color = new Color(0.5f, 0.5f, 1f); // Blue
-        else if (IsHorny)
-            Color = new Color(1f, 0f, 1f); // Magenta
-        else
-            Color = new Color(0f, 1f, 0f); // Green
-    }
+	// Wandering behavior
+	public Vector2 WanderTarget;
+	public float WanderTimer = 0f;
+	public const float WANDER_TIME = 5f;
 
-    public void Behave(List<Agent> agents, List<Food> foodList, float dt)
-    {
-        if (IsHungry)
-        {
-            Food nearestFood = FindNearestFood(foodList);
-            if (nearestFood != null)
-            {
-                Seek(nearestFood.Position, dt);
-                if (Position.DistanceTo(nearestFood.Position) < 10f)
-                {
-                    nearestFood.IsEaten = true;
-                    Hunger -= 50f;
-                    Energy += 10f;
-                }
-            }
-        }
-        else if (IsTired)
-        {
-            Velocity *= 0.95f;
-            Energy += 20f * dt;
-            Energy = MathF.Min(Energy, 100f);
-        }
-        else if (IsHorny)
-        {
-            Agent mate = FindMate(agents);
-            if (mate != null)
-            {
-                Seek(mate.Position, dt);
-                if (Position.DistanceTo(mate.Position) < 10f)
-                {
-                    Horniness -= 60f;
-                    // Optionally: spawn new agent
-                }
-            }
-        }
-    }
+	public bool IsHungry => Hunger >= HungerThreshold;
+	public bool IsHorny => Horniness >= HorninessThreshold && ReproductionCooldown <= 0f;
+	public bool IsTired => Energy <= TirednessThreshold;
+	public bool IsStarving => Hunger >= 95f;
 
-    private void Seek(Vector2 target, float dt)
-    {
-        Vector2 direction = (target - Position).Normalized();
-        Velocity = direction * Velocity.Length();
-        Position += Velocity * dt;
-    }
+	public Agent(Vector2 position, Vector2 velocity, Color color, Random rng)
+	{
+		Position = position;
+		Velocity = velocity;
+		Color = color;
 
-    private Food FindNearestFood(List<Food> foodList)
-    {
-        Food nearest = null;
-        float closestDist = float.MaxValue;
+		InitializeTraits(rng);
+		SetRandomWanderTarget(rng);
+	}
 
-        foreach (var food in foodList)
-        {
-            if (food.IsEaten) continue;
-            float dist = Position.DistanceTo(food.Position);
-            if (dist < closestDist)
-            {
-                closestDist = dist;
-                nearest = food;
-            }
-        }
-        return nearest;
-    }
+	// Constructor for offspring
+	public Agent(Vector2 position, Agent parent1, Agent parent2, Random rng)
+	{
+		Position = position;
 
-    private Agent FindMate(List<Agent> agents)
-    {
-        foreach (var other in agents)
-        {
-            if (other == this) continue;
-            if (other.IsHorny && Position.DistanceTo(other.Position) < 100f)
-            {
-                return other;
-            }
-        }
-        return null;
-    }
+		// Inherit traits with some mutation
+		HungerResistance = MutateValue((parent1.HungerResistance + parent2.HungerResistance) / 2, 0.1f, rng);
+		LibidoStrength = MutateValue((parent1.LibidoStrength + parent2.LibidoStrength) / 2, 0.1f, rng);
+		EnergyEfficiency = MutateValue((parent1.EnergyEfficiency + parent2.EnergyEfficiency) / 2, 0.1f, rng);
+		Longevity = MutateValue((parent1.Longevity + parent2.Longevity) / 2, 0.1f, rng);
+
+		// Set derived values
+		SetDerivedValues();
+
+		// Initialize as a baby
+		Age = 0f;
+		Hunger = 30f;
+		Horniness = 0f;
+		Energy = 80f;
+		Health = 100f;
+		ReproductionCooldown = 30f; // Can't reproduce immediately
+
+		// Create velocity
+		float angle = (float)(rng.NextDouble() * Math.PI * 2);
+		Velocity = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * BaseSpeed;
+
+		// Mix colors from parents with some variation
+		float r = MutateValue((parent1.Color.R + parent2.Color.R) / 2, 0.1f, rng);
+		float g = MutateValue((parent1.Color.G + parent2.Color.G) / 2, 0.1f, rng);
+		float b = MutateValue((parent1.Color.B + parent2.Color.B) / 2, 0.1f, rng);
+		Color = new Color(r, g, b);
+
+		SetRandomWanderTarget(rng);
+	}
+
+	public void InitializeTraits(Random rng)
+	{
+		// Initialize personality traits
+		HungerResistance = 0.3f + (float)rng.NextDouble() * 0.7f;  // 0.3-1.0
+		LibidoStrength = 0.2f + (float)rng.NextDouble() * 0.8f;    // 0.2-1.0
+		EnergyEfficiency = 0.4f + (float)rng.NextDouble() * 0.6f;  // 0.4-1.0
+		Longevity = 0.5f + (float)rng.NextDouble() * 0.5f;         // 0.5-1.0
+
+		SetDerivedValues();
+
+		// Randomize initial need levels
+		Hunger = (float)rng.NextDouble() * 50f;
+		Horniness = (float)rng.NextDouble() * 40f;
+		Energy = 50f + (float)rng.NextDouble() * 50f;
+		ReproductionCooldown = 0f;
+	}
+
+	public void SetDerivedValues()
+	{
+		// Set thresholds based on personality
+		HungerThreshold = 50f + (HungerResistance * 40f);       // 50-90
+		HorninessThreshold = 60f + ((1 - LibidoStrength) * 30f);  // 60-90 (inverse of libido)
+		TirednessThreshold = 20f + (EnergyEfficiency * 20f);    // 20-40
+
+		// Set rates based on personality
+		HungerRate = 5f + (1 - HungerResistance) * 10f;          // 5-15
+		HorninessRate = 2f + (LibidoStrength * 8f);            // 2-10
+		EnergyDrainRate = 5f + (1 - EnergyEfficiency) * 8f;      // 5-13
+
+		// Set max age based on longevity (between 60 and 120 seconds)
+		MaxAge = 60f + (Longevity * 60f);
+
+		// Set base speed (agents with higher energy efficiency move faster)
+		BaseSpeed = 70f + (EnergyEfficiency * 80f);
+	}
+
+	public float MutateValue(float value, float mutationRate, Random rng)
+	{
+		float mutation = ((float)rng.NextDouble() * 2 - 1) * mutationRate;
+		return Mathf.Clamp(value + mutation, 0f, 1f);
+	}
+
+	public void UpdateNeeds(float dt)
+	{
+		if (IsDead) return;
+
+		// Update age and check for natural death
+		Age += dt;
+		if (Age >= MaxAge)
+		{
+			Die();
+			return;
+		}
+
+		// Decrease reproduction cooldown
+		if (ReproductionCooldown > 0)
+			ReproductionCooldown -= dt;
+
+		// Increase needs
+		Hunger += HungerRate * dt;
+
+		// Only increase horniness after maturity (30% of max age)
+		if (Age > MaxAge * 0.3f)
+			Horniness += HorninessRate * dt;
+
+		Energy -= EnergyDrainRate * dt;
+
+		// Cap values
+		Hunger = MathF.Min(Hunger, 100f);
+		Horniness = MathF.Min(Horniness, 100f);
+		Energy = MathF.Max(Energy, 0f);
+
+		// Health effects
+		if (IsStarving)
+		{
+			Health -= 5f * dt;
+			if (Health <= 0)
+			{
+				Die();
+				return;
+			}
+		}
+		else if (Health < 100f && !IsHungry)
+		{
+			// Recover health when not hungry
+			Health += 2f * dt;
+			Health = MathF.Min(Health, 100f);
+		}
+
+		// Wander timer
+		WanderTimer -= dt;
+		if (WanderTimer <= 0)
+		{
+			SetRandomWanderTarget(new Random());
+		}
+	}
+
+	public void SetRandomWanderTarget(Random rng)
+	{
+		// Get a random point on screen (this will need to be adjusted based on screen size)
+		float x = 50f + (float)rng.NextDouble() * 700f;
+		float y = 50f + (float)rng.NextDouble() * 500f;
+		WanderTarget = new Vector2(x, y);
+		WanderTimer = WANDER_TIME + (float)rng.NextDouble() * 5f; // 5-10 seconds
+	}
+
+	public void Die()
+	{
+		IsDead = true;
+		Color = new Color(0.3f, 0.3f, 0.3f); // Gray when dead
+	}
+
+	public void DecideBehavior()
+	{
+		if (IsDead) return;
+
+		// Priority order: Hunger > Tiredness > Horniness > Wandering
+		if (IsStarving)
+			Color = new Color(1f, 0f, 0f); // Red when starving
+		else if (IsHungry)
+			Color = new Color(1f, 1f, 0f); // Yellow
+		else if (IsTired)
+			Color = new Color(0.5f, 0.5f, 1f); // Blue
+		else if (IsHorny)
+			Color = new Color(1f, 0f, 1f); // Magenta
+		else
+			Color = new Color(0f, 1f, 0f); // Green
+	}
+
+	public Agent Behave(List<Agent> agents, List<Food> foodList, float dt, Random rng)
+	{
+		if (IsDead) return null;
+
+		Agent newAgent = null;
+
+		// Behavior priority follows the same natural order
+		if (IsHungry)
+		{
+			Food nearestFood = FindNearestFood(foodList);
+			if (nearestFood != null)
+			{
+				Seek(nearestFood.Position, dt);
+				if (Position.DistanceTo(nearestFood.Position) < 10f)
+				{
+					nearestFood.IsEaten = true;
+					Hunger -= 50f;
+					Energy += 20f;
+				}
+			}
+			else
+			{
+				// If no food is found, wander to look for food
+				Wander(dt);
+			}
+		}
+		else if (IsTired)
+		{
+			// Slow down when tired
+			Velocity *= 0.95f;
+			Energy += 30f * dt;
+			Energy = MathF.Min(Energy, 100f);
+		}
+		else if (IsHorny)
+		{
+			Agent mate = FindMate(agents);
+			if (mate != null)
+			{
+				Seek(mate.Position, dt);
+				if (Position.DistanceTo(mate.Position) < 10f)
+				{
+					// Reproduce
+					Horniness -= 60f;
+					mate.Horniness -= 60f;
+
+					// Set cooldown
+					ReproductionCooldown = 20f;
+					mate.ReproductionCooldown = 20f;
+
+					// Create new agent
+					Vector2 birthPos = new Vector2(
+						(Position.X + mate.Position.X) / 2 + ((float)rng.NextDouble() * 20 - 10),
+						(Position.Y + mate.Position.Y) / 2 + ((float)rng.NextDouble() * 20 - 10)
+					);
+
+					newAgent = new Agent(birthPos, this, mate, rng);
+
+					// Reproduction costs energy
+					Energy -= 10f;
+					mate.Energy -= 10f;
+				}
+			}
+			else
+			{
+				// If no mate is found, wander to look for mates
+				Wander(dt);
+			}
+		}
+		else
+		{
+			// Wander when no pressing needs
+			Wander(dt);
+		}
+
+		return newAgent;
+	}
+
+	public void Wander(float dt)
+	{
+		if (Position.DistanceTo(WanderTarget) < 20f)
+		{
+			// Reached target, get a new one
+			SetRandomWanderTarget(new Random());
+		}
+		else
+		{
+			// Move toward wander target
+			Seek(WanderTarget, dt);
+		}
+	}
+
+	public void Seek(Vector2 target, float dt)
+	{
+		Vector2 direction = (target - Position).Normalized();
+		float speed = BaseSpeed;
+
+		// Adjust speed based on state
+		if (IsTired) speed *= 0.6f;
+		if (IsStarving) speed *= 0.4f;
+
+		Velocity = direction * speed;
+	}
+
+	public Food FindNearestFood(List<Food> foodList)
+	{
+		Food nearest = null;
+		float closestDist = float.MaxValue;
+		foreach (var food in foodList)
+		{
+			if (food.IsEaten) continue;
+			float dist = Position.DistanceTo(food.Position);
+			if (dist < closestDist)
+			{
+				closestDist = dist;
+				nearest = food;
+			}
+		}
+		return nearest;
+	}
+
+	public Agent FindMate(List<Agent> agents)
+	{
+		foreach (var other in agents)
+		{
+			if (other == this || other.IsDead) continue;
+
+			// Check if other agent is mature, horny and close enough
+			if (other.IsHorny &&
+				other.Age > other.MaxAge * 0.3f &&
+				Position.DistanceTo(other.Position) < 150f)
+			{
+				return other;
+			}
+		}
+		return null;
+	}
 }
 #endregion
 
 #region Food Class
 public class Food
 {
-    public Vector2 Position { get; set; }
-    public bool IsEaten { get; set; }
+	public Vector2 Position { get; set; }
+	public bool IsEaten { get; set; }
+	public float Age { get; set; } = 0f;
+	public float MaxAge { get; set; } = 30f; // Food rots after 30 seconds
 
-    public Food(Vector2 position)
-    {
-        Position = position;
-        IsEaten = false;
-    }
+	public Food(Vector2 position)
+	{
+		Position = position;
+		IsEaten = false;
+	}
+
+	public void Update(float dt)
+	{
+		Age += dt;
+	}
+
+	public bool IsRotten()
+	{
+		return Age >= MaxAge;
+	}
 }
 #endregion
 
 public partial class main_node : Node2D
 {
-    private const int AGENT_COUNT = 20;
-    private const float AGENT_RADIUS = 5f;
-    private readonly Color BOUNCE_COLOR = new Color(1.0f, 0.2f, 0.2f);
+	public const int INITIAL_AGENT_COUNT = 20;
+	public const float AGENT_RADIUS = 5f;
+	public readonly Color BOUNCE_COLOR = new Color(1.0f, 0.2f, 0.2f);
+	public List<Agent> agents = new List<Agent>();
+	public Vector2 screenSize;
+	public Random rng = new Random();
+	public const int MAX_FOOD = 100;
+	public List<Food> foodItems = new List<Food>();
+	public float foodSpawnTimer = 0f;
+	public const float FOOD_SPAWN_INTERVAL = 1f;
+	public const int MAX_AGENTS = 100;
 
-    private Agent[] agents;
-    private Vector2 screenSize;
-    private Random rng = new Random();
+	public override void _Ready()
+	{
+		screenSize = GetViewport().GetVisibleRect().Size;
 
-    private const int MAX_FOOD = 100;
-    private List<Food> foodItems = new List<Food>();
-    private float foodSpawnTimer = 0f;
-    private const float FOOD_SPAWN_INTERVAL = 2f;
+		// Create initial agents
+		for (int i = 0; i < INITIAL_AGENT_COUNT; i++)
+		{
+			float x = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.X - 2 * AGENT_RADIUS);
+			float y = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.Y - 2 * AGENT_RADIUS);
+			Vector2 position = new Vector2(x, y);
+			float angle = (float)(rng.NextDouble() * Math.PI * 2);
+			float speed = 50f + (float)rng.NextDouble() * 100f;
+			Vector2 velocity = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * speed;
+			Color color = new Color((float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble());
+			agents.Add(new Agent(position, velocity, color, rng));
+		}
+	}
 
-    public override void _Ready()
-    {
-        screenSize = GetViewport().GetVisibleRect().Size;
-        agents = new Agent[AGENT_COUNT];
+	public override void _Process(double delta)
+	{
+		float dt = (float)delta;
 
-        for (int i = 0; i < AGENT_COUNT; i++)
-        {
-            float x = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.X - 2 * AGENT_RADIUS);
-            float y = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.Y - 2 * AGENT_RADIUS);
-            Vector2 position = new Vector2(x, y);
+		// Spawn food
+		foodSpawnTimer += dt;
+		if (foodSpawnTimer >= FOOD_SPAWN_INTERVAL && foodItems.Count < MAX_FOOD)
+		{
+			foodSpawnTimer = 0f;
+			float x = 20f + (float)rng.NextDouble() * (screenSize.X - 40f);
+			float y = 20f + (float)rng.NextDouble() * (screenSize.Y - 40f);
+			foodItems.Add(new Food(new Vector2(x, y)));
+		}
 
-            float angle = (float)(rng.NextDouble() * Math.PI * 2);
-            float speed = 50f + (float)rng.NextDouble() * 100f;
-            Vector2 velocity = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * speed;
+		// Update food
+		for (int i = foodItems.Count - 1; i >= 0; i--)
+		{
+			foodItems[i].Update(dt);
+			if (foodItems[i].IsRotten() || foodItems[i].IsEaten)
+			{
+				foodItems.RemoveAt(i);
+			}
+		}
 
-            Color color = new Color((float)rng.NextDouble(), (float)rng.NextDouble(), (float)rng.NextDouble());
+		// Process agents and collect new offspring
+		List<Agent> newAgents = new List<Agent>();
 
-            agents[i] = new Agent(position, velocity, color);
-        }
-    }
+		for (int i = 0; i < agents.Count; i++)
+		{
+			Agent agent = agents[i];
 
-    public override void _Process(double delta)
-    {
-        float dt = (float)delta;
+			// Skip dead agents
+			if (agent.IsDead)
+				continue;
 
-        foodSpawnTimer += dt;
-        if (foodSpawnTimer >= FOOD_SPAWN_INTERVAL && foodItems.Count < MAX_FOOD)
-        {
-            foodSpawnTimer = 0f;
-            float x = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.X - 2 * AGENT_RADIUS);
-            float y = AGENT_RADIUS + (float)rng.NextDouble() * (screenSize.Y - 2 * AGENT_RADIUS);
-            foodItems.Add(new Food(new Vector2(x, y)));
-        }
+			agent.UpdateNeeds(dt);
+			agent.DecideBehavior();
 
-        List<Agent> agentList = agents.ToList();
+			// Process behavior and check for reproduction
+			Agent offspring = agent.Behave(agents, foodItems, dt, rng);
+			if (offspring != null && agents.Count + newAgents.Count < MAX_AGENTS)
+			{
+				newAgents.Add(offspring);
+			}
 
-        for (int i = 0; i < agents.Length; i++)
-        {
-            Agent agent = agents[i];
+			// Update position and handle bouncing
+			agent.Position += agent.Velocity * dt;
+			bool bounced = HandleBouncing(agent);
 
-            agent.UpdateNeeds(dt);
-            agent.DecideBehavior();
-            agent.Behave(agentList, foodItems, dt);
+			if (bounced)
+			{
+				agent.Color = BOUNCE_COLOR;
+			}
+		}
 
-            // Bounce logic
-            bool bounced = false;
-            agent.Position += agent.Velocity * dt;
+		// Add new agents
+		agents.AddRange(newAgents);
 
-            if (agent.Position.X < AGENT_RADIUS)
-            {
-                agent.Position = new Vector2(AGENT_RADIUS, agent.Position.Y);
-                agent.Velocity = new Vector2(-agent.Velocity.X, agent.Velocity.Y);
-                bounced = true;
-            }
-            else if (agent.Position.X > screenSize.X - AGENT_RADIUS)
-            {
-                agent.Position = new Vector2(screenSize.X - AGENT_RADIUS, agent.Position.Y);
-                agent.Velocity = new Vector2(-agent.Velocity.X, agent.Velocity.Y);
-                bounced = true;
-            }
-            if (agent.Position.Y < AGENT_RADIUS)
-            {
-                agent.Position = new Vector2(agent.Position.X, AGENT_RADIUS);
-                agent.Velocity = new Vector2(agent.Velocity.X, -agent.Velocity.Y);
-                bounced = true;
-            }
-            else if (agent.Position.Y > screenSize.Y - AGENT_RADIUS)
-            {
-                agent.Position = new Vector2(agent.Position.X, screenSize.Y - AGENT_RADIUS);
-                agent.Velocity = new Vector2(agent.Velocity.X, -agent.Velocity.Y);
-                bounced = true;
-            }
+		// Remove dead agents (after a while to show them)
+		for (int i = agents.Count - 1; i >= 0; i--)
+		{
+			if (agents[i].IsDead && agents[i].Age > agents[i].MaxAge + 5f)
+			{
+				agents.RemoveAt(i);
+			}
+		}
 
-            if (bounced)
-            {
-                agent.Color = BOUNCE_COLOR;
-            }
-        }
+		QueueRedraw();
+	}
 
-        foodItems.RemoveAll(f => f.IsEaten);
+	public bool HandleBouncing(Agent agent)
+	{
+		bool bounced = false;
 
-        QueueRedraw();
-    }
+		if (agent.Position.X < AGENT_RADIUS)
+		{
+			agent.Position = new Vector2(AGENT_RADIUS, agent.Position.Y);
+			agent.Velocity = new Vector2(-agent.Velocity.X, agent.Velocity.Y);
+			bounced = true;
+		}
+		else if (agent.Position.X > screenSize.X - AGENT_RADIUS)
+		{
+			agent.Position = new Vector2(screenSize.X - AGENT_RADIUS, agent.Position.Y);
+			agent.Velocity = new Vector2(-agent.Velocity.X, agent.Velocity.Y);
+			bounced = true;
+		}
 
-    public override void _Draw()
-    {
-        foreach (Agent agent in agents)
-        {
-            DrawCircle(agent.Position, AGENT_RADIUS, agent.Color);
-        }
+		if (agent.Position.Y < AGENT_RADIUS)
+		{
+			agent.Position = new Vector2(agent.Position.X, AGENT_RADIUS);
+			agent.Velocity = new Vector2(agent.Velocity.X, -agent.Velocity.Y);
+			bounced = true;
+		}
+		else if (agent.Position.Y > screenSize.Y - AGENT_RADIUS)
+		{
+			agent.Position = new Vector2(agent.Position.X, screenSize.Y - AGENT_RADIUS);
+			agent.Velocity = new Vector2(agent.Velocity.X, -agent.Velocity.Y);
+			bounced = true;
+		}
 
-        foreach (Food food in foodItems)
-        {
-            DrawCircle(food.Position, 3f, new Color(0f, 1f, 0f));
-        }
-    }
+		return bounced;
+	}
+
+	public override void _Draw()
+	{
+		// Draw food
+		foreach (Food food in foodItems)
+		{
+			float ageRatio = food.Age / food.MaxAge;
+			Color foodColor = new Color(0f, 1f - ageRatio, 0f); // Gets darker as it ages
+			DrawCircle(food.Position, 3f, foodColor);
+		}
+
+		// Draw agents
+		foreach (Agent agent in agents)
+		{
+			float size = AGENT_RADIUS;
+
+			// Make young agents smaller
+			if (agent.Age < agent.MaxAge * 0.3f)
+			{
+				size = AGENT_RADIUS * (0.5f + 0.5f * (agent.Age / (agent.MaxAge * 0.3f)));
+			}
+
+			DrawCircle(agent.Position, size, agent.Color);
+		}
+	}
 }
